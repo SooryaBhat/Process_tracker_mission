@@ -1,0 +1,11 @@
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
+node_modules/
+.env
+# env-config.js contains your API key — never commit it with a real key
+# Vercel generates this at build time via the build command
+# For local dev: set your key in env-config.js but do NOT commit it
+# env-config.js

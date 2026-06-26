@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Internship Mission 2026 — Soorya Bhat</title>
+  <meta name="description" content="AI-powered internship preparation platform" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎯</text></svg>" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.10.0/tabler-icons.min.css" />
+  <script src="env-config.js"></script>
+</head>
+<body>
+
+<!-- HUD -->
+<header class="hud" id="hud">
+  <div class="hud-brand">
+    <span class="hud-icon">🎯</span>
+    <span class="hud-title">Mission <span class="accent">2026</span></span>
+  </div>
+  <div class="hud-stats" id="hud-stats">
+    <div class="hud-pill indigo" id="hud-day">Day 1</div>
+    <div class="hud-pill green"  id="hud-streak">🔥 0 streak</div>
+    <div class="hud-pill amber"  id="hud-dsa">⚡ 0 DSA</div>
+    <div class="hud-pill blue"   id="hud-apps">📬 0 apps</div>
+    <div class="hud-pill purple" id="hud-score">✅ 0/6</div>
+    <div class="hud-pill gold"   id="hud-xp">⭐ Lv.1</div>
+  </div>
+  <button class="hud-menu-btn" id="menu-toggle" aria-label="Menu"><i class="ti ti-menu-2"></i></button>
+</header>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <nav class="sidebar" id="sidebar">
+    <div class="nav-group-label">Overview</div>
+    <ul class="nav-list">
+      <li><button class="nav-btn active" data-page="dashboard"><i class="ti ti-layout-dashboard"></i><span>Dashboard</span></button></li>
+      <li><button class="nav-btn" data-page="phase1"><i class="ti ti-clipboard-list"></i><span>Phase 1</span><span class="nav-badge" id="nav-p1-badge">0%</span></button></li>
+      <li><button class="nav-btn" data-page="phase2"><i class="ti ti-target"></i><span>Phase 2 Tracker</span></button></li>
+      <li><button class="nav-btn" data-page="applications"><i class="ti ti-briefcase"></i><span>Applications</span><span class="nav-badge" id="nav-apps-badge">0</span></button></li>
+      <li><button class="nav-btn" data-page="project"><i class="ti ti-brain"></i><span>AI Finance Project</span></button></li>
+    </ul>
+    <div class="nav-group-label">AI Practice</div>
+    <ul class="nav-list">
+      <li><button class="nav-btn" data-page="quiz"><i class="ti ti-bulb"></i><span>Technical Quiz</span><span class="nav-badge ai-badge">AI</span></button></li>
+      <li><button class="nav-btn" data-page="dsa-ai"><i class="ti ti-code"></i><span>DSA Practice</span><span class="nav-badge ai-badge">AI</span></button></li>
+      <li><button class="nav-btn" data-page="vocab"><i class="ti ti-book"></i><span>Vocabulary</span><span class="nav-badge ai-badge">AI</span></button></li>
+      <li><button class="nav-btn" data-page="english"><i class="ti ti-language"></i><span>English</span><span class="nav-badge ai-badge">AI</span></button></li>
+      <li><button class="nav-btn" data-page="aptitude"><i class="ti ti-calculator"></i><span>Aptitude</span><span class="nav-badge ai-badge">AI</span></button></li>
+    </ul>
+    <div class="sidebar-footer">
+      <div class="sidebar-phase-tag" id="sidebar-phase">📅 Phase 1 Active</div>
+    </div>
+  </nav>
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+  <!-- Main -->
+  <main class="main" id="main">
+
+    <!-- ===== DASHBOARD ===== -->
+    <div class="page active" id="page-dashboard">
+      <div class="page-header">
+        <h1 class="page-title"><i class="ti ti-layout-dashboard"></i> Mission Control</h1>
+        <p class="page-sub" id="dash-date"></p>
+      </div>
+      <section class="section"><div class="card" id="today-mission"></div></section>
+      <section class="section">
+        <div class="section-header"><h2 class="section-title">Daily Scorecard</h2><span class="section-tag" id="score-total">0 / 6</span></div>
+        <div class="score-grid" id="scorecard"></div>
+      </section>
+      <section class="section"><h2 class="section-title">Mission Stats</h2><div class="stat-grid" id="stat-grid"></div></section>
+      <section class="section"><h2 class="section-title">Progress Overview</h2><div class="progress-cards" id="progress-overview"></div></section>
+      <section class="section">
+        <div class="section-header"><h2 class="section-title">Weekly Activity</h2><span class="section-tag">Last 7 days</span></div>
+        <div class="card"><div class="chart-wrap"><div class="chart-y-labels" id="chart-y"></div><div class="chart-bars" id="week-chart"></div></div><div class="chart-x-labels" id="week-labels"></div><div class="chart-legend"><span class="legend-dot indigo"></span><span>Daily Score</span><span class="legend-dot amber" style="margin-left:16px"></span><span>DSA Problems</span></div></div>
+      </section>
+    </div>
+
+    <!-- ===== PHASE 1 ===== -->
+    <div class="page" id="page-phase1">
+      <div class="page-header"><h1 class="page-title"><i class="ti ti-clipboard-list"></i> Phase 1 — Foundation</h1><p class="page-sub">June 24 – July 4, 2026 · Complete AI/ML prep & revise core CS</p></div>
+      <section class="section"><div class="section-header"><h2 class="section-title">Phase 1 Overall</h2><span class="section-tag" id="p1-overall-tag">0%</span></div><div class="card"><div class="multi-progress" id="p1-multi-progress"></div></div></section>
+      <section class="section"><div class="section-header"><h2 class="section-title">AI/ML Prime Course</h2><span class="section-tag" id="aiml-tag">0/7</span></div><div class="card task-card" id="aiml-tasks"></div></section>
+      <section class="section"><div class="section-header"><h2 class="section-title">CS Fundamentals</h2><span class="section-tag" id="cs-tag">0/5</span></div><div class="card task-card" id="cs-tasks"></div></section>
+      <section class="section"><div class="section-header"><h2 class="section-title">DSA Foundation</h2><span class="section-tag">Target: 10–20 by July 4</span></div><div class="card"><div class="dsa-target-bar" id="p1-dsa-target-bar"></div><div class="stat-grid" id="p1-dsa-stats"></div></div></section>
+      <section class="section"><div class="section-header"><h2 class="section-title">Communication</h2><span class="section-tag">Daily</span></div><div class="card task-card" id="comm-tasks"></div></section>
+    </div>
+
+    <!-- ===== PHASE 2 ===== -->
+    <div class="page" id="page-phase2">
+      <div class="page-header"><h1 class="page-title"><i class="ti ti-target"></i> Phase 2 — Internship Prep</h1><p class="page-sub">July 5 onwards · Daily recurring tasks</p></div>
+      <div class="tab-bar" id="p2-tabs">
+        <button class="tab-btn active" data-tab="dsa"><i class="ti ti-code"></i> DSA</button>
+        <button class="tab-btn" data-tab="interview"><i class="ti ti-message-circle"></i> Interview</button>
+        <button class="tab-btn" data-tab="proj-explain"><i class="ti ti-layout-cards"></i> Projects</button>
+        <button class="tab-btn" data-tab="aptitude"><i class="ti ti-calculator"></i> Aptitude</button>
+        <button class="tab-btn" data-tab="networking"><i class="ti ti-users"></i> Networking</button>
+      </div>
+      <div class="tab-content active" id="tab-dsa">
+        <div class="card"><div class="card-title-row"><span class="card-title"><i class="ti ti-code"></i> Topic-wise DSA Tracker</span><span class="card-total-badge" id="dsa-grand-total">Total: 0</span></div><div id="dsa-topics-list"></div><div class="dsa-add-row"><select class="input-sm" id="dsa-topic-select"></select><input type="number" class="input-sm" id="dsa-add-count" min="1" max="50" value="1" style="width:70px"><button class="btn primary" onclick="App.addDSA()"><i class="ti ti-plus"></i> Add</button></div></div>
+        <div class="card" style="margin-top:12px"><div class="card-title-row"><span class="card-title"><i class="ti ti-chart-bar"></i> Topic Distribution</span></div><div id="dsa-topic-chart"></div></div>
+      </div>
+      <div class="tab-content" id="tab-interview"><div class="card task-card" id="interview-tasks"></div></div>
+      <div class="tab-content" id="tab-proj-explain"><div class="card task-card" id="project-explain-tasks"></div></div>
+      <div class="tab-content" id="tab-aptitude"><div class="card task-card" id="aptitude-tasks"></div></div>
+      <div class="tab-content" id="tab-networking"><div class="card task-card" id="networking-tasks"></div><div class="card" style="margin-top:12px"><div class="card-title-row"><span class="card-title"><i class="ti ti-chart-line"></i> Networking Stats</span></div><div class="stat-grid" id="network-stats"></div></div></div>
+    </div>
+
+    <!-- ===== APPLICATIONS ===== -->
+    <div class="page" id="page-applications">
+      <div class="page-header"><h1 class="page-title"><i class="ti ti-briefcase"></i> Applications</h1><p class="page-sub">Track every internship application</p></div>
+      <section class="section"><div class="stat-grid" id="app-stat-grid"></div></section>
+      <section class="section"><div class="card"><div class="card-title-row"><span class="card-title"><i class="ti ti-plus"></i> Add Application</span></div><div class="app-form"><input class="input-sm" id="app-company" placeholder="Company name *" /><input class="input-sm" id="app-role" placeholder="Role *" /><input class="input-sm" type="date" id="app-date" /><select class="input-sm" id="app-status-select"><option value="applied">Applied</option><option value="oa">OA Received</option><option value="hr">HR Round</option><option value="tech">Technical Round</option><option value="final">Final Round</option><option value="rejected">Rejected</option><option value="selected">Selected 🎉</option></select><button class="btn primary" onclick="App.addApplication()"><i class="ti ti-send"></i> Add</button></div></div></section>
+      <section class="section"><div class="section-header"><h2 class="section-title">All Applications</h2><select class="input-sm" id="app-filter" onchange="App.renderApplications()" style="font-size:11px;padding:4px 8px"><option value="all">All</option><option value="applied">Applied</option><option value="oa">OA</option><option value="hr">HR</option><option value="tech">Technical</option><option value="final">Final</option><option value="rejected">Rejected</option><option value="selected">Selected</option></select></div><div class="card" style="padding:0;overflow:hidden"><div class="app-table-wrap"><table class="app-table" id="apps-table"><thead><tr><th>Company</th><th>Role</th><th>Date</th><th>Status</th><th></th></tr></thead><tbody id="apps-tbody"></tbody></table></div><div class="empty-state hidden" id="apps-empty"><i class="ti ti-inbox"></i><p>No applications yet. Start applying!</p></div></div></section>
+    </div>
+
+    <!-- ===== PROJECT ===== -->
+    <div class="page" id="page-project">
+      <div class="page-header"><h1 class="page-title"><i class="ti ti-brain"></i> AI Financial Intelligence System</h1><p class="page-sub">Major Project · Track research, development & deployment</p></div>
+      <section class="section"><div class="card"><div class="card-title-row"><span class="card-title"><i class="ti ti-chart-line"></i> Overall Progress</span><span class="card-total-badge" id="proj-pct-badge">0%</span></div><div class="progress-bar-lg"><div class="progress-fill-lg" id="proj-bar"></div></div><div class="proj-phase-chips" id="proj-phase-chips"></div></div></section>
+      <section class="section"><h2 class="section-title">Development Phases</h2><div class="proj-phases-grid" id="proj-phases"></div></section>
+      <section class="section"><div class="section-header"><h2 class="section-title">Milestones</h2><button class="btn secondary" onclick="App.showMilestoneForm()"><i class="ti ti-plus"></i> Add</button></div><div class="card" id="milestones-card"><div id="milestones-list"></div><div class="milestone-form hidden" id="milestone-form"><div class="input-row"><input class="input-sm flex1" id="milestone-text" placeholder="Milestone..." /><input class="input-sm" type="date" id="milestone-date" style="width:140px" /><button class="btn primary" onclick="App.addMilestone()">Add</button><button class="btn" onclick="App.hideMilestoneForm()">Cancel</button></div></div></div></section>
+      <section class="section"><h2 class="section-title">Research Notes</h2><div class="card"><textarea class="note-area" id="proj-notes" placeholder="Links, ideas, dataset sources, architecture decisions..."></textarea><div class="note-actions"><span class="note-saved" id="note-saved-msg"></span><button class="btn primary" onclick="App.saveNotes()"><i class="ti ti-device-floppy"></i> Save</button></div></div></section>
+    </div>
+
+    <!-- ===== QUIZ ===== -->
+    <div class="page" id="page-quiz">
+      <div id="quiz-page-content"></div>
+    </div>
+
+    <!-- ===== DSA AI ===== -->
+    <div class="page" id="page-dsa-ai">
+      <div id="dsa-page-content"></div>
+    </div>
+
+    <!-- ===== VOCAB ===== -->
+    <div class="page" id="page-vocab">
+      <div id="vocab-page-content"></div>
+    </div>
+
+    <!-- ===== ENGLISH ===== -->
+    <div class="page" id="page-english">
+      <div id="english-page-content"></div>
+    </div>
+
+    <!-- ===== APTITUDE ===== -->
+    <div class="page" id="page-aptitude">
+      <div id="apt-page-content"></div>
+    </div>
+
+  </main>
+</div>
+
+<!-- XP Toast -->
+<div class="xp-toast" id="xp-toast-el"></div>
+
+<script src="js/data.js"></script>
+<script src="js/config.js"></script>
+<script src="js/store.js"></script>
+<script src="js/gemini.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/pages/quiz.js"></script>
+<script src="js/pages/dsaai.js"></script>
+<script src="js/pages/vocab.js"></script>
+<script src="js/pages/english.js"></script>
+<script src="js/pages/aptitude.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
