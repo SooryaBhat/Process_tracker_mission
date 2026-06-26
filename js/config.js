@@ -15,7 +15,7 @@ const Config = (() => {
   }
   return {
     get geminiKey() { return findKey(); },
-    geminiModel: 'gemini-2.0-flash',   // ← changed from gemini-2.0-flash
+    geminiModel: 'gemini-2.5-flash',   // ← changed from gemini-2.0-flash
     geminiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/',
     saveKey(key) { try { localStorage.setItem('im26_apikey', key.trim()); } catch(e) {} },
     clearKey() { try { localStorage.removeItem('im26_apikey'); } catch(e) {} }
