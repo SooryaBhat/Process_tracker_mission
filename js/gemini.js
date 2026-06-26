@@ -16,7 +16,7 @@ const Gemini = (() => {
     const url = Config.geminiEndpoint + Config.geminiModel + ':generateContent?key=' + key;
     const body = {
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.8, maxOutputTokens: 4096 }
+      generationConfig: { temperature: 0.3, maxOutputTokens: 4096, responseMimeType: "application/json" }
     };
     if (systemPrompt) {
       body.systemInstruction = { parts: [{ text: systemPrompt }] };
