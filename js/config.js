@@ -1,19 +1,25 @@
 // ============================================================
-//  CONFIG — reads Gemini API key from environment
-//  For plain HTML deploy: set window.GEMINI_API_KEY in .env
-//  For Vercel: set VITE_GEMINI_API_KEY in project settings
+//  CONFIG v2 — multiple key sources, never crashes
 // ============================================================
-const Config = {
-  // Vercel injects VITE_ prefixed env vars at build time via vite,
-  // but since this is a plain HTML app we read from a meta tag
-  // or a global set by env-config.js (generated at deploy time).
-  // Fallback: empty string → UI shows "Add API key" prompt.
-  get geminiKey() {
-    return (
-      (typeof window !== 'undefined' && window.GEMINI_API_KEY) ||
-      ''
-    );
-  },
-  geminiModel: 'gemini-2.0-flash',
-  geminiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/',
-};
+const Config = (() => {
+  function findKey() {
+    // 1. In-app saved key (user entered manually)
+    try {
+      const saved = localStorage.getItem('im26_apikey');
+      if (saved && saved.length > 10) return saved;
+    } catch(e) {}
+    // 2. Injected by Vercel build command via env-config.js
+    try {
+      if (typeof window !== 'undefined' && window.GEMINI_API_KEY && window.GEMINI_API_KEY.length > 10)
+        return window.GEMINI_API_KEY;
+    } catch(e) {}
+    return '';
+  }
+  return {
+    get geminiKey() { return findKey(); },
+    geminiModel: 'gemini-2.0-flash',
+    geminiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/',
+    saveKey(key) { try { localStorage.setItem('im26_apikey', key.trim()); } catch(e) {} },
+    clearKey() { try { localStorage.removeItem('im26_apikey'); } catch(e) {} }
+  };
+})();
