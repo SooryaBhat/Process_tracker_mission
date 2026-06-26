@@ -31,6 +31,7 @@ const Gemini = (() => {
       throw new Error(e.error ? e.error.message : 'API Error ' + res.status);
     }
     const data = await res.json();
+    console.log("Gemini Response:", data);
     const text = data.candidates && data.candidates[0] &&
                  data.candidates[0].content && data.candidates[0].content.parts &&
                  data.candidates[0].content.parts[0] &&
@@ -40,22 +41,38 @@ const Gemini = (() => {
 
   function parseJSON(text) {
     if (!text) return null;
-    try {
-      // Strip markdown code fences if present
-      const clean = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
-      return JSON.parse(clean);
-    } catch(e1) {
-      // Try to extract first JSON array or object
-      try {
-        const arrMatch = text.match(/\[[\s\S]*\]/);
-        if (arrMatch) return JSON.parse(arrMatch[0]);
-        const objMatch = text.match(/\{[\s\S]*\}/);
-        if (objMatch) return JSON.parse(objMatch[0]);
-      } catch(e2) {}
-      return null;
-    }
-  }
 
+    try {
+        return JSON.parse(text);
+    } catch {}
+
+    try {
+        text = text.replace(/```json/g, "");
+        text = text.replace(/```/g, "");
+    } catch {}
+
+    try {
+        const start = text.indexOf("[");
+        const end = text.lastIndexOf("]");
+
+        if (start !== -1 && end !== -1) {
+            return JSON.parse(text.substring(start, end + 1));
+        }
+    } catch {}
+
+    try {
+        const start = text.indexOf("{");
+        const end = text.lastIndexOf("}");
+
+        if (start !== -1 && end !== -1) {
+            return JSON.parse(text.substring(start, end + 1));
+        }
+    } catch {}
+
+    console.log("Unable to parse:", text);
+
+    return null;
+}
   async function generateQuiz(topics, difficulty, weakAreas, count) {
     count = count || 25;
     const diffLabel = DIFF_LABEL[difficulty] || 'Easy';
@@ -71,7 +88,14 @@ const Gemini = (() => {
       '"correct":0,"explanation":"Why A is correct","wrong_explanations":["Why B","Why C","Why D"],' +
       '"interview_tip":"Tip here","difficulty":"' + diffLabel + '"}]';
     const text = await call(prompt);
-    return parseJSON(text);
+
+    console.log("Quiz Raw Text:", text);
+
+    const result = parseJSON(text);
+
+    console.log("Quiz Parsed:", result);
+
+    return result;
   }
 
   async function generateDSA(topics, difficulty, count) {
@@ -89,7 +113,16 @@ const Gemini = (() => {
       '"constraints":["1<=n<=10^4"],"hint":"Use hash map",' +
       '"approach":"Hash map approach. TC: O(n)","time_complexity":"O(n)","space_complexity":"O(n)","followup":"What if sorted?"}]';
     const text = await call(prompt);
-    return parseJSON(text);
+
+    console.log("===== DSA RAW =====");
+    console.log(text);
+
+    const result = parseJSON(text);
+
+    console.log("===== DSA PARSED =====");
+    console.log(result);
+
+    return result;
   }
 
   async function generateVocab(count) {
@@ -109,7 +142,16 @@ const Gemini = (() => {
       '"quiz_options":["A) We iterate the database.","B) Lets iterate on this design.","C) The iterate was done.","D) He iterated the room."],' +
       '"quiz_correct":1,"quiz_explanation":"B is correct - iterate means to refine through repetition."}]';
     const text = await call(prompt);
-    return parseJSON(text);
+
+    console.log("===== VOCAB RAW =====");
+    console.log(text);
+
+    const result = parseJSON(text);
+
+    console.log("===== VOCAB PARSED =====");
+    console.log(result);
+
+    return result;
   }
 
   async function generateEnglish(difficulty) {
@@ -143,7 +185,16 @@ const Gemini = (() => {
       '"interview_phrases":["Phrase 1 with context","Phrase 2","Phrase 3"],' +
       '"key_takeaway":"One sentence summary"}';
     const text = await call(prompt);
-    return parseJSON(text);
+
+    console.log("===== ENGLISH RAW =====");
+    console.log(text);
+
+    const result = parseJSON(text);
+
+    console.log("===== ENGLISH PARSED =====");
+    console.log(result);
+
+    return result;
   }
 
   async function generateAptitude(topics, difficulty, weakAreas, count) {
@@ -161,7 +212,16 @@ const Gemini = (() => {
       '"correct":0,"solution":"Discount=25% of 800=200. Final=800-200=600.",' +
       '"shortcut":"75% of 800 = 600 directly","difficulty":"' + diffLabel + '"}]';
     const text = await call(prompt);
-    return parseJSON(text);
+
+    console.log("===== APTITUDE RAW =====");
+    console.log(text);
+
+    const result = parseJSON(text);
+
+    console.log("===== APTITUDE PARSED =====");
+    console.log(result);
+
+    return result;
   }
 
   async function reviewCode(problem, userCode, language) {
@@ -180,7 +240,16 @@ const Gemini = (() => {
       '"good_things":["good point 1","good point 2"],' +
       '"interview_verdict":"Would this pass a coding interview? Why?"}';
     const text = await call(prompt);
-    return parseJSON(text);
+
+    console.log("===== CODE REVIEW RAW =====");
+    console.log(text);
+
+    const result = parseJSON(text);
+
+    console.log("===== CODE REVIEW PARSED =====");
+    console.log(result);
+
+    return result;
   }
 
   return {
