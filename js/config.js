@@ -9,7 +9,7 @@ const Config = (() => {
   }
   return {
     get geminiKey() { return findKey(); },
-    geminiModel:    'gemini-2.0-flash',
+    geminiModel:    'gemini-2.5-flash',
     geminiEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/',
     saveKey(k) { try { localStorage.setItem('im26_apikey', k.trim()); } catch(e) {} },
     clearKey()  { try { localStorage.removeItem('im26_apikey'); } catch(e) {} }
