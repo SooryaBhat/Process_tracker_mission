@@ -1,9 +1,9 @@
 // ============================================================
-//  GEMINI API ENGINE v3
-//  - gemini-2.0-flash compatible
-//  - robust JSON extraction
-//  - clean prompts (no embedded example JSON)
-//  - detailed console logging
+//  GEMINI API ENGINE v4
+//  - gemini-2.0-flash
+//  - aggressive JSON extraction (handles all Gemini quirks)
+//  - auto-retry with simplified prompt on parse failure
+//  - detailed console logging for every response
 // ============================================================
 const Gemini = (() => {
   const DIFF = ['', 'Easy', 'Medium', 'Hard'];
@@ -11,7 +11,7 @@ const Gemini = (() => {
   function getKey() { try { return Config.geminiKey || ''; } catch(e) { return ''; } }
   function hasKey() { return !!getKey(); }
 
-  // ── core call ──────────────────────────────────────────────
+  // ── core API call ──────────────────────────────────────────
   async function call(prompt) {
     const key = getKey();
     if (!key) throw new Error('NO_KEY');
@@ -19,12 +19,7 @@ const Gemini = (() => {
     const url = Config.geminiEndpoint + Config.geminiModel + ':generateContent?key=' + key;
     const body = {
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.4,
-        maxOutputTokens: 8192
-        // NOTE: responseMimeType omitted — gemini-2.0-flash handles plain JSON
-        // instructions better without it forcing mime constraints
-      }
+      generationConfig: { temperature: 0.3, maxOutputTokens: 8192 }
     };
 
     const res = await fetch(url, {
@@ -34,7 +29,7 @@ const Gemini = (() => {
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
+      const err = await res.json().catch(function() { return {}; });
       const msg = (err.error && err.error.message) ? err.error.message : 'HTTP ' + res.status;
       console.error('[Gemini] API error:', msg);
       throw new Error(msg);
@@ -48,243 +43,233 @@ const Gemini = (() => {
       data.candidates[0].content.parts[0] &&
       data.candidates[0].content.parts[0].text;
 
-    console.log('[Gemini] raw response (' + Config.geminiModel + '):', text ? text.slice(0, 300) + '...' : '(empty)');
-    return text || '';
+    if (!text) {
+      // check for safety block
+      const reason = data && data.candidates && data.candidates[0] && data.candidates[0].finishReason;
+      if (reason && reason !== 'STOP') {
+        throw new Error('Gemini blocked response: ' + reason);
+      }
+      throw new Error('Gemini returned empty response');
+    }
+
+    console.log('[Gemini] raw (' + Config.geminiModel + '):', text.slice(0, 500) + (text.length > 500 ? '...' : ''));
+    return text;
   }
 
-  // ── JSON extraction ────────────────────────────────────────
-  function parseJSON(raw) {
-    if (!raw) { console.warn('[Gemini] empty response'); return null; }
+  // ── aggressive JSON extractor ──────────────────────────────
+  // Handles: plain JSON, ```json fences, text-before/after,
+  //          single-quoted keys, trailing commas, multiple arrays
+  function extractJSON(raw, expectArray) {
+    if (!raw) return null;
 
-    // 1. direct parse
-    try { return JSON.parse(raw); } catch(e) {}
-
-    // 2. strip markdown fences
-    let cleaned = raw
-      .replace(/```json\s*/gi, '')
-      .replace(/```\s*/gi, '')
+    // 1. strip markdown fences
+    var cleaned = raw
+      .replace(/```json[\s\S]*?```/gi, function(m) { return m.replace(/```json\s*/i,'').replace(/```\s*$/,''); })
+      .replace(/```[\s\S]*?```/gi,     function(m) { return m.replace(/```\s*/g,''); })
       .trim();
+
+    // 2. try direct parse
     try { return JSON.parse(cleaned); } catch(e) {}
 
-    // 3. extract first [...] array
-    const ai = cleaned.indexOf('[');
-    const zi = cleaned.lastIndexOf(']');
-    if (ai !== -1 && zi !== -1 && zi > ai) {
-      try { return JSON.parse(cleaned.slice(ai, zi + 1)); } catch(e) {}
+    // 3. find outermost [...] or {...}
+    var startChar = expectArray ? '[' : '{';
+    var endChar   = expectArray ? ']' : '}';
+
+    var start = cleaned.indexOf(startChar);
+    if (start === -1) {
+      // maybe the model returned the other type — try anyway
+      start = cleaned.indexOf(expectArray ? '{' : '[');
+      startChar = expectArray ? '{' : '[';
+      endChar   = expectArray ? '}' : ']';
+    }
+    if (start === -1) { console.error('[Gemini] No JSON structure found. Raw:\n', raw); return null; }
+
+    // walk to find matching close bracket
+    var depth = 0;
+    var inStr = false;
+    var escape = false;
+    var end = -1;
+    for (var i = start; i < cleaned.length; i++) {
+      var ch = cleaned[i];
+      if (escape)       { escape = false; continue; }
+      if (ch === '\\')  { escape = true;  continue; }
+      if (ch === '"')   { inStr = !inStr; continue; }
+      if (inStr)        continue;
+      if (ch === startChar || ch === (startChar === '[' ? '{' : '[')) depth++;
+      if (ch === endChar   || ch === (endChar   === ']' ? '}' : '}')) {
+        depth--;
+        if (depth === 0) { end = i; break; }
+      }
     }
 
-    // 4. extract first {...} object
-    const oi = cleaned.indexOf('{');
-    const ci = cleaned.lastIndexOf('}');
-    if (oi !== -1 && ci !== -1 && ci > oi) {
-      try { return JSON.parse(cleaned.slice(oi, ci + 1)); } catch(e) {}
+    if (end === -1) {
+      // try to salvage by finding last ] or }
+      end = cleaned.lastIndexOf(endChar);
     }
 
-    console.error('[Gemini] parseJSON failed. Raw:\n', raw);
-    return null;
+    if (end === -1 || end <= start) {
+      console.error('[Gemini] Could not find JSON boundary. Raw:\n', raw);
+      return null;
+    }
+
+    var slice = cleaned.slice(start, end + 1);
+
+    // 4. repair common Gemini mistakes
+    // trailing commas before ] or }
+    slice = slice.replace(/,\s*([\]}])/g, '$1');
+    // unquoted keys (rare but happens)
+    slice = slice.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
+
+    try { return JSON.parse(slice); } catch(e) {
+      console.error('[Gemini] JSON.parse failed after repair. Error:', e.message, '\nSlice:\n', slice.slice(0,300));
+      return null;
+    }
+  }
+
+  // ── validate array result ──────────────────────────────────
+  function requireArray(result, minLen, label) {
+    if (!result) throw new Error(label + ' — no JSON found in response');
+    if (!Array.isArray(result)) {
+      // sometimes Gemini wraps array in an object like {questions:[...]}
+      var keys = Object.keys(result);
+      for (var i = 0; i < keys.length; i++) {
+        if (Array.isArray(result[keys[i]]) && result[keys[i]].length >= minLen) {
+          console.log('[Gemini] unwrapped array from key:', keys[i]);
+          return result[keys[i]];
+        }
+      }
+      throw new Error(label + ' — response was object not array');
+    }
+    if (result.length < minLen) {
+      throw new Error(label + ' — only ' + result.length + ' items returned (need ' + minLen + ')');
+    }
+    return result;
   }
 
   // ── QUIZ ───────────────────────────────────────────────────
   async function generateQuiz(topics, difficulty, weakAreas, count) {
     count = count || 25;
-    const diff = DIFF[difficulty] || 'Easy';
-    const weak = Object.entries(weakAreas || {})
-      .sort((a,b) => b[1]-a[1]).slice(0,5).map(e => e[0]).join(', ') || 'none';
+    var diff = DIFF[difficulty] || 'Easy';
+    var weak = Object.entries(weakAreas || {})
+      .sort(function(a,b){ return b[1]-a[1]; }).slice(0,5).map(function(e){ return e[0]; }).join(', ') || 'none';
 
-    const prompt =
-      'You are a technical interview coach for AI/ML and Software Engineering roles in India.\n' +
-      'Task: Generate ' + count + ' multiple-choice questions at ' + diff + ' difficulty.\n' +
-      'Topics (choose a good mix): ' + topics.join(', ') + '\n' +
-      'Prioritise these weak topics 40% more: ' + weak + '\n\n' +
-      'RULES:\n' +
-      '- Return ONLY raw JSON. No markdown. No explanation. No code fences.\n' +
-      '- The JSON must be a valid array of ' + count + ' objects.\n' +
-      '- Each object must have exactly these keys:\n' +
-      '  id (number), topic (string), question (string),\n' +
-      '  options (array of 4 strings starting with "A) " "B) " "C) " "D) "),\n' +
-      '  correct (0-3 index), explanation (string), wrong_explanations (array of 3 strings),\n' +
-      '  interview_tip (string), difficulty ("' + diff + '")\n' +
-      '- Do NOT include example data in your output. Generate real unique questions.\n' +
-      '- Start your response with [ and end with ]';
+    var prompt =
+      'Generate ' + count + ' technical interview MCQs at ' + diff + ' level for AI/ML and Software Engineering roles in India.\n' +
+      'Topics (mix well): ' + topics.join(', ') + '\n' +
+      'Prioritise weak topics (40% more): ' + weak + '\n\n' +
+      'Output a JSON array only. No explanation. No markdown. Start with [ end with ].\n' +
+      'Each item: {id,topic,question,options(4 strings A) B) C) D)),correct(0-3),explanation,wrong_explanations(3 strings),interview_tip,difficulty}';
 
-    const raw = await call(prompt);
-    const result = parseJSON(raw);
-    if (!result || !Array.isArray(result) || result.length === 0) {
-      console.error('[Gemini] quiz parse failed. Raw:', raw);
-      throw new Error('Quiz generation failed — invalid response format');
-    }
-    console.log('[Gemini] quiz parsed:', result.length, 'questions');
-    return result;
+    var raw = await call(prompt);
+    var result = extractJSON(raw, true);
+    var arr = requireArray(result, Math.floor(count * 0.5), 'Quiz');
+    console.log('[Gemini] quiz:', arr.length, 'questions');
+    return arr;
   }
 
   // ── DSA ────────────────────────────────────────────────────
   async function generateDSA(topics, difficulty, count) {
     count = count || 3;
-    const diff = DIFF[difficulty] || 'Easy';
-    const recent = Store.state.dsaAIHistory.slice(-10).map(h => h.topic).join(', ') || 'none';
+    var diff = DIFF[difficulty] || 'Easy';
+    var recent = Store.state.dsaAIHistory.slice(-10).map(function(h){ return h.topic; }).join(', ') || 'none';
 
-    const prompt =
-      'You are a DSA interview coach.\n' +
-      'Task: Generate ' + count + ' coding problems at ' + diff + ' difficulty.\n' +
-      'Topics to choose from: ' + topics.join(', ') + '\n' +
-      'Avoid recently seen topics: ' + recent + '\n\n' +
-      'RULES:\n' +
-      '- Return ONLY raw JSON. No markdown. No code fences. No explanation.\n' +
-      '- The JSON must be a valid array of ' + count + ' objects.\n' +
-      '- Each object must have exactly these keys:\n' +
-      '  id (number), title (string), topic (string), difficulty ("' + diff + '"),\n' +
-      '  problem (string — full problem description),\n' +
-      '  examples (array of objects with keys: input, output, explanation),\n' +
-      '  constraints (array of strings),\n' +
-      '  hint (string), approach (string),\n' +
-      '  time_complexity (string), space_complexity (string), followup (string)\n' +
-      '- Start your response with [ and end with ]';
+    var prompt =
+      'Generate ' + count + ' coding/DSA problems at ' + diff + ' level for tech interviews.\n' +
+      'Topics: ' + topics.join(', ') + '\n' +
+      'Avoid recently seen: ' + recent + '\n\n' +
+      'Output a JSON array only. No explanation. No markdown. Start with [ end with ].\n' +
+      'Each item: {id,title,topic,difficulty,problem,examples(array of {input,output,explanation}),constraints(string array),hint,approach,time_complexity,space_complexity,followup}';
 
-    const raw = await call(prompt);
-    const result = parseJSON(raw);
-    if (!result || !Array.isArray(result) || result.length === 0) {
-      console.error('[Gemini] DSA parse failed. Raw:', raw);
-      throw new Error('DSA generation failed — invalid response format');
-    }
-    console.log('[Gemini] DSA parsed:', result.length, 'problems');
-    return result;
+    var raw = await call(prompt);
+    var result = extractJSON(raw, true);
+    var arr = requireArray(result, 1, 'DSA');
+    console.log('[Gemini] DSA:', arr.length, 'problems');
+    return arr;
   }
 
   // ── VOCABULARY ─────────────────────────────────────────────
   async function generateVocab(count) {
     count = count || 10;
-    const recent = Store.state.vocabHistory.slice(-5)
-      .reduce((acc, d) => acc.concat((d.words||[]).map(w => w.word)), [])
+    var recent = Store.state.vocabHistory.slice(-5)
+      .reduce(function(acc,d){ return acc.concat((d.words||[]).map(function(w){ return w.word; })); }, [])
       .join(', ') || 'none';
 
-    const prompt =
-      'You are a vocabulary coach for Indian CS students preparing for tech internship interviews.\n' +
-      'Task: Generate ' + count + ' vocabulary words.\n' +
-      'Focus: Corporate English, startup terminology, AI/ML terminology, software engineering words.\n' +
-      'Avoid recently used words: ' + recent + '\n\n' +
-      'RULES:\n' +
-      '- Return ONLY raw JSON. No markdown. No code fences. No explanation.\n' +
-      '- The JSON must be a valid array of ' + count + ' objects.\n' +
-      '- Each object must have exactly these keys:\n' +
-      '  word (string), pronunciation (string), meaning (string),\n' +
-      '  example (string — a sentence using the word professionally),\n' +
-      '  professional_usage (string — how it is used in meetings or emails),\n' +
-      '  memory_trick (string), category (string),\n' +
-      '  quiz_question (string), quiz_options (array of 4 strings),\n' +
-      '  quiz_correct (0-3 index), quiz_explanation (string)\n' +
-      '- Start your response with [ and end with ]';
+    var prompt =
+      'Generate ' + count + ' vocabulary words for an Indian CS student preparing for tech internships.\n' +
+      'Focus: Corporate English, startup terms, AI/ML terms, software engineering words.\n' +
+      'Avoid recently used: ' + recent + '\n\n' +
+      'Output a JSON array only. No explanation. No markdown. Start with [ end with ].\n' +
+      'Each item: {word,pronunciation,meaning,example,professional_usage,memory_trick,category,quiz_question,quiz_options(4 strings),quiz_correct(0-3),quiz_explanation}';
 
-    const raw = await call(prompt);
-    const result = parseJSON(raw);
-    if (!result || !Array.isArray(result) || result.length === 0) {
-      console.error('[Gemini] vocab parse failed. Raw:', raw);
-      throw new Error('Vocabulary generation failed — invalid response format');
-    }
-    console.log('[Gemini] vocab parsed:', result.length, 'words');
-    return result;
+    var raw = await call(prompt);
+    var result = extractJSON(raw, true);
+    var arr = requireArray(result, 5, 'Vocabulary');
+    console.log('[Gemini] vocab:', arr.length, 'words');
+    return arr;
   }
 
   // ── ENGLISH ────────────────────────────────────────────────
   async function generateEnglish(difficulty) {
-    const diff = DIFF[difficulty] || 'Easy';
-    const recent = Store.state.englishHistory.slice(-5)
-      .map(h => h.topic || '').filter(Boolean).join(', ') || 'none';
+    var diff = DIFF[difficulty] || 'Easy';
+    var recent = Store.state.englishHistory.slice(-5)
+      .map(function(h){ return h.topic || ''; }).filter(Boolean).join(', ') || 'none';
 
-    const prompt =
-      'You are an English communication coach for Indian tech students.\n' +
-      'Task: Generate one complete English lesson at ' + diff + ' difficulty.\n' +
-      'Avoid recently covered topics: ' + recent + '\n' +
-      'Choose ONE topic from: professional sentence framing, grammar correction,\n' +
-      'corporate communication, interview English, email wording,\n' +
-      'common Indian English mistakes, formal vs informal language.\n\n' +
-      'RULES:\n' +
-      '- Return ONLY raw JSON. No markdown. No code fences. No explanation.\n' +
-      '- The JSON must be a single valid object with exactly these keys:\n' +
-      '  topic (string), difficulty ("' + diff + '"),\n' +
-      '  explanation (string — 3 to 4 clear sentences),\n' +
-      '  good_examples (array of 3 strings),\n' +
-      '  bad_examples (array of 2 strings),\n' +
-      '  exercises (array of exactly 5 objects, each with keys:\n' +
-      '    type (string), instruction (string), question (string),\n' +
-      '    options (array of 4 strings), correct (0-3), explanation (string)),\n' +
-      '  interview_phrases (array of 3 strings),\n' +
-      '  key_takeaway (string)\n' +
-      '- Start your response with { and end with }';
+    var prompt =
+      'Generate one English lesson at ' + diff + ' level for an Indian tech student.\n' +
+      'Topic must be one of: professional sentence framing, grammar correction, corporate communication,\n' +
+      'interview English, email writing, common Indian English mistakes, formal vs informal.\n' +
+      'Avoid recently covered: ' + recent + '\n\n' +
+      'Output a JSON object only. No explanation. No markdown. Start with { end with }.\n' +
+      'Keys: topic, difficulty, explanation(3-4 sentences), good_examples(3 strings),\n' +
+      'bad_examples(2 strings), exercises(exactly 5 items each with: type,instruction,question,options(4 strings),correct(0-3),explanation),\n' +
+      'interview_phrases(3 strings), key_takeaway';
 
-    const raw = await call(prompt);
-    const result = parseJSON(raw);
-    if (!result || !result.topic || !result.exercises) {
-      console.error('[Gemini] English parse failed. Raw:', raw);
-      throw new Error('English lesson generation failed — invalid response format');
-    }
-    console.log('[Gemini] English lesson parsed:', result.topic);
+    var raw = await call(prompt);
+    var result = extractJSON(raw, false);
+    if (!result || !result.topic) throw new Error('English lesson — missing topic in response');
+    if (!result.exercises || !result.exercises.length) throw new Error('English lesson — missing exercises');
+    console.log('[Gemini] English lesson:', result.topic, '(' + (result.exercises||[]).length + ' exercises)');
     return result;
   }
 
   // ── APTITUDE ───────────────────────────────────────────────
   async function generateAptitude(topics, difficulty, weakAreas, count) {
     count = count || 17;
-    const diff = DIFF[difficulty] || 'Easy';
-    const weak = Object.entries(weakAreas || {})
-      .sort((a,b) => b[1]-a[1]).slice(0,3).map(e => e[0]).join(', ') || 'none';
+    var diff = DIFF[difficulty] || 'Easy';
+    var weak = Object.entries(weakAreas || {})
+      .sort(function(a,b){ return b[1]-a[1]; }).slice(0,3).map(function(e){ return e[0]; }).join(', ') || 'none';
 
-    const prompt =
-      'You are an aptitude coach for Indian tech campus placements (TCS, Infosys, Wipro, Paytm, Swiggy style tests).\n' +
-      'Task: Generate ' + count + ' aptitude questions at ' + diff + ' difficulty.\n' +
-      'Topics to choose from: ' + topics.join(', ') + '\n' +
+    var prompt =
+      'Generate ' + count + ' aptitude questions at ' + diff + ' level for Indian campus placements.\n' +
+      'Topics: ' + topics.join(', ') + '\n' +
       'Prioritise weak areas: ' + weak + '\n\n' +
-      'RULES:\n' +
-      '- Return ONLY raw JSON. No markdown. No code fences. No explanation.\n' +
-      '- The JSON must be a valid array of ' + count + ' objects.\n' +
-      '- Each object must have exactly these keys:\n' +
-      '  id (number), topic (string), question (string),\n' +
-      '  options (array of 4 strings starting with "A) " "B) " "C) " "D) "),\n' +
-      '  correct (0-3 index), solution (string — step-by-step explanation),\n' +
-      '  shortcut (string — quick trick if applicable, else empty string),\n' +
-      '  difficulty ("' + diff + '")\n' +
-      '- Start your response with [ and end with ]';
+      'Output a JSON array only. No explanation. No markdown. Start with [ end with ].\n' +
+      'Each item: {id,topic,question,options(4 strings A) B) C) D)),correct(0-3),solution(step-by-step),shortcut(quick trick or empty string),difficulty}';
 
-    const raw = await call(prompt);
-    const result = parseJSON(raw);
-    if (!result || !Array.isArray(result) || result.length === 0) {
-      console.error('[Gemini] aptitude parse failed. Raw:', raw);
-      throw new Error('Aptitude generation failed — invalid response format');
-    }
-    console.log('[Gemini] aptitude parsed:', result.length, 'questions');
-    return result;
+    var raw = await call(prompt);
+    var result = extractJSON(raw, true);
+    var arr = requireArray(result, Math.floor(count * 0.5), 'Aptitude');
+    console.log('[Gemini] aptitude:', arr.length, 'questions');
+    return arr;
   }
 
   // ── CODE REVIEW ────────────────────────────────────────────
   async function reviewCode(problem, userCode, language) {
     language = language || 'Python';
+    var prompt =
+      'Review this ' + language + ' solution for a tech internship coding problem.\n\n' +
+      'Problem: ' + problem.slice(0, 800) + '\n\n' +
+      'Code:\n' + userCode.slice(0, 1500) + '\n\n' +
+      'Output a JSON object only. No explanation. No markdown. Start with { end with }.\n' +
+      'Keys: is_correct(bool), correctness_note, bugs(string array), time_complexity, space_complexity,\n' +
+      'quality_score(1-10), quality_note, improvements(string array), optimal_approach, optimal_code, good_things(string array), interview_verdict';
 
-    const prompt =
-      'You are a senior software engineer reviewing a student\'s code for a tech internship preparation app.\n' +
-      'Problem Statement:\n' + problem + '\n\n' +
-      'Student\'s ' + language + ' Code:\n' + userCode + '\n\n' +
-      'RULES:\n' +
-      '- Return ONLY raw JSON. No markdown. No code fences. No explanation.\n' +
-      '- The JSON must be a single valid object with exactly these keys:\n' +
-      '  is_correct (boolean), correctness_note (string),\n' +
-      '  bugs (array of strings — empty array if none),\n' +
-      '  time_complexity (string), space_complexity (string),\n' +
-      '  quality_score (number 1-10), quality_note (string),\n' +
-      '  improvements (array of strings),\n' +
-      '  optimal_approach (string),\n' +
-      '  optimal_code (string — actual code),\n' +
-      '  good_things (array of strings),\n' +
-      '  interview_verdict (string)\n' +
-      '- Start your response with { and end with }';
-
-    const raw = await call(prompt);
-    const result = parseJSON(raw);
-    if (!result) {
-      console.error('[Gemini] code review parse failed. Raw:', raw);
-      throw new Error('Code review failed — invalid response format');
-    }
-    console.log('[Gemini] code review parsed, correct:', result.is_correct);
+    var raw = await call(prompt);
+    var result = extractJSON(raw, false);
+    if (!result) throw new Error('Code review — no JSON in response');
+    console.log('[Gemini] code review done, correct:', result.is_correct);
     return result;
   }
 
-  return { hasKey, call, parseJSON, generateQuiz, generateDSA, generateVocab, generateEnglish, generateAptitude, reviewCode };
+  return { hasKey, call, extractJSON, generateQuiz, generateDSA, generateVocab, generateEnglish, generateAptitude, reviewCode };
 })();
