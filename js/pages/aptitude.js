@@ -43,7 +43,7 @@ const AptPage = (() => {
           '<div class="quiz-start-card">' +
             '<div class="quiz-start-icon">&#x1F9EE;</div>' +
             '<h2>Ready for Aptitude Practice?</h2>' +
-            '<p>10 questions: Quant, Logical Reasoning &amp; Coding Aptitude</p>' +
+            '<p>17 questions: Quant, Logical Reasoning &amp; Coding Aptitude</p>' +
             (hasKey ? '<button class="btn primary btn-lg" onclick="AptPage.startSession()"><i class="ti ti-player-play"></i> Start Session</button>' : '') +
           '</div>') +
       '</div>';
@@ -59,7 +59,7 @@ const AptPage = (() => {
     questions = []; currentIdx = 0; selected = null; revealed = false; score = 0;
     UI.loading('apt-content', 'Generating aptitude questions...');
     try {
-      var q = await Gemini.generateAptitude(DATA.aptitudeTopics, Store.state.aptDifficulty, Store.state.aptWeakAreas, 10);
+      var q = await Gemini.generateAptitude(DATA.aptitudeTopics, Store.state.aptDifficulty, Store.state.aptWeakAreas, 17);
       if (!q || !q.length) throw new Error('No questions returned');
       questions = q;
       renderQuestion();
