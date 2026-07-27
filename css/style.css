@@ -2101,3 +2101,100 @@ option { background: var(--surface2); }
   .level-info { flex-wrap: wrap; gap: 6px; }
   .xp-num { margin-left: 0; }
 }
+
+/* ============================================================
+   PYTHON LEARNING PAGE — additional styles
+   ============================================================ */
+
+.python-topic-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--indigo-dim);
+  border-left: 4px solid var(--indigo);
+  border-radius: var(--radius-lg);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.python-topic-banner i {
+  font-size: 22px;
+  color: var(--indigo);
+  flex-shrink: 0;
+}
+
+.py-day-badge {
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--indigo-bg);
+  color: var(--indigo);
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--indigo-dim);
+}
+
+.py-section {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.py-section strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.py-key-points {
+  padding-left: 18px;
+  margin-top: 4px;
+}
+
+.py-key-points li {
+  color: var(--text2);
+  margin-bottom: 5px;
+  line-height: 1.5;
+}
+
+.py-topic-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--indigo);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.py-tab-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 20px;
+  margin-left: 4px;
+}
+
+.py-tab-badge.done     { background: var(--green-bg);  color: var(--green); }
+.py-tab-badge.progress { background: var(--amber-bg);  color: var(--amber); }
+.py-tab-badge.warn     { background: var(--rose-bg);   color: var(--rose);  }
+
+.red-box {
+  background: var(--rose-bg);
+  border: 1px solid #5c1a1a;
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--rose);
+}
+
+.red-box ul { padding-left: 16px; margin-top: 6px; }
+.red-box li { margin-bottom: 4px; }
