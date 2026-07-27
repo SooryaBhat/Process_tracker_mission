@@ -1,11 +1,14 @@
 // ============================================================
-//  GEMINI API ENGINE v7
-//  Root fixes:
-//  1. NO responseMimeType (breaks gemini-2.0-flash)
-//  2. NO embedded example JSON in prompts
-//  3. Reduced counts: quiz=10, aptitude=10 (avoids token truncation)
-//  4. Truncation recovery: salvages complete objects from cut-off JSON
-//  5. Auto-retry on parse failure
+//  GEMINI API ENGINE v8
+//  Root cause of truncation: long 'solution' fields in aptitude
+//  and long 'explanation' in quiz cause MAX_TOKENS cut-off.
+//
+//  Fix strategy:
+//  1. Detect truncation (MAX_TOKENS or Unterminated string error)
+//  2. On truncation: retry with HALF the count + strict char limits
+//  3. Never use 'reformat' retry for truncation (data is already JSON)
+//  4. For aptitude: solution = 1 short sentence only
+//  5. salvageArray as last resort for partial data
 // ============================================================
 const Gemini = (() => {
   const DIFF = ['', 'Easy', 'Medium', 'Hard'];
@@ -23,11 +26,7 @@ const Gemini = (() => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.3,
-          maxOutputTokens: 8192
-          // NO responseMimeType — it rejects prompts containing JSON examples
-        }
+        generationConfig: { temperature: 0.3, maxOutputTokens: 8192 }
       })
     });
     if (!res.ok) {
@@ -37,19 +36,18 @@ const Gemini = (() => {
       throw new Error(msg);
     }
     const data = await res.json();
-    const finishReason = data && data.candidates && data.candidates[0] &&
-                         data.candidates[0].finishReason;
+    const finishReason = (data && data.candidates && data.candidates[0] &&
+                          data.candidates[0].finishReason) || 'STOP';
     const text = data && data.candidates && data.candidates[0] &&
                  data.candidates[0].content && data.candidates[0].content.parts &&
                  data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
     if (!text) {
-      throw new Error('Empty response from Gemini (finishReason: ' + (finishReason || 'unknown') + ')');
+      throw new Error('Empty response from Gemini (finishReason: ' + finishReason + ')');
     }
-    if (finishReason === 'MAX_TOKENS') {
-      console.warn('[Gemini] Response hit MAX_TOKENS — will attempt truncation recovery');
-    }
-    console.log('[Gemini] raw (' + finishReason + '):', text.slice(0, 200));
-    return text;
+    console.log('[Gemini] raw (' + finishReason + '):', text.slice(0, 150));
+    // attach finishReason so callWithRetry can detect truncation
+    text._finishReason = finishReason;
+    return { text: text, truncated: finishReason === 'MAX_TOKENS' };
   }
 
   // ── bracket-depth walker ──────────────────────────────────
@@ -70,18 +68,21 @@ const Gemini = (() => {
         if (depth === 0) return str.slice(start, i + 1);
       }
     }
-    return null; // not found (truncated)
+    return null;
   }
 
-  // ── salvage complete objects from truncated array ─────────
-  // When Gemini hits MAX_TOKENS mid-JSON, we extract whatever
-  // complete objects were generated before the cut-off.
-  function salvageArray(str) {
-    var results = [];
-    var depth = 0, inStr = false, prevSlash = false;
-    var objStart = -1;
-    var arrStarted = false;
+  // ── detect truncation from parse error ───────────────────
+  function isTruncationError(e) {
+    var msg = e && e.message ? e.message.toLowerCase() : '';
+    return msg.indexOf('unterminated') !== -1 ||
+           msg.indexOf('unexpected end') !== -1 ||
+           msg.indexOf('unexpected token') !== -1;
+  }
 
+  // ── salvage complete objects from cut-off array ───────────
+  function salvageArray(str) {
+    var results = [], depth = 0, inStr = false, prevSlash = false;
+    var objStart = -1, arrStarted = false;
     for (var i = 0; i < str.length; i++) {
       var ch = str[i];
       if (inStr) {
@@ -91,32 +92,21 @@ const Gemini = (() => {
         continue;
       }
       if (ch === '"') { inStr = true; continue; }
-
       if (ch === '[' && !arrStarted) { arrStarted = true; depth = 1; continue; }
       if (!arrStarted) continue;
-
-      if (ch === '{') {
-        if (depth === 1) objStart = i; // start of a top-level object
-        depth++;
-      } else if (ch === '[') {
-        depth++;
-      } else if (ch === '}') {
+      if (ch === '{') { if (depth === 1) objStart = i; depth++; }
+      else if (ch === '[') { depth++; }
+      else if (ch === '}') {
         depth--;
         if (depth === 1 && objStart !== -1) {
-          // complete top-level object found
-          try {
-            results.push(JSON.parse(str.slice(objStart, i + 1)));
-            objStart = -1;
-          } catch(e) {}
+          try { results.push(JSON.parse(str.slice(objStart, i + 1))); objStart = -1; } catch(e) {}
         }
-      } else if (ch === ']') {
-        depth--;
-      }
+      } else if (ch === ']') { depth--; }
     }
     return results;
   }
 
-  // ── unwrap {key: [...]} wrapper ───────────────────────────
+  // ── unwrap {key:[...]} ────────────────────────────────────
   function maybeUnwrap(parsed, wantArray) {
     if (!wantArray || Array.isArray(parsed)) return parsed;
     if (typeof parsed !== 'object' || !parsed) return parsed;
@@ -130,24 +120,28 @@ const Gemini = (() => {
     return parsed;
   }
 
-  // ── main JSON extractor ───────────────────────────────────
+  // ── extract JSON from raw text ────────────────────────────
   function extractJSON(raw, expectArray) {
     if (!raw) return null;
     var wantArray = !!expectArray;
-
-    // strip markdown fences
     var cleaned = raw
       .replace(/```json\s*([\s\S]*?)```/gi, function(_, g) { return g.trim(); })
       .replace(/```\s*([\s\S]*?)```/gi,     function(_, g) { return g.trim(); })
       .trim();
 
-    // 1. direct parse (clean response)
-    try {
-      var d = JSON.parse(cleaned);
-      return maybeUnwrap(d, wantArray);
-    } catch(e) {}
+    // 1. direct parse
+    try { return maybeUnwrap(JSON.parse(cleaned), wantArray); } catch(e) {
+      if (wantArray && isTruncationError(e)) {
+        // truncated — try to salvage whatever completed before cut-off
+        var salvaged = salvageArray(cleaned);
+        if (salvaged.length > 0) {
+          console.warn('[Gemini] Salvaged', salvaged.length, 'items from truncated response');
+          return salvaged;
+        }
+      }
+    }
 
-    // 2. bracket-depth walk to find outermost structure
+    // 2. bracket-depth walk
     var preferOpen = wantArray ? '[' : '{';
     var starts = [];
     for (var si = 0; si < cleaned.length && starts.length < 8; si++) {
@@ -156,13 +150,12 @@ const Gemini = (() => {
     starts.sort(function(a, b) {
       return ((cleaned[a] === preferOpen ? 0 : 1) - (cleaned[b] === preferOpen ? 0 : 1)) || a - b;
     });
-
     for (var ci = 0; ci < starts.length; ci++) {
       var openCh  = cleaned[starts[ci]];
       var closeCh = openCh === '[' ? ']' : '}';
       var slice   = walkBrackets(cleaned, starts[ci], openCh, closeCh);
       if (!slice) continue;
-      slice = slice.replace(/,(\s*[}\]])/g, '$1'); // trailing comma repair
+      slice = slice.replace(/,(\s*[}\]])/g, '$1');
       try {
         var parsed = JSON.parse(slice);
         var unwrapped = maybeUnwrap(parsed, wantArray);
@@ -172,209 +165,242 @@ const Gemini = (() => {
       } catch(e) {}
     }
 
-    // 3. truncation recovery — salvage whatever complete objects exist
+    // 3. final salvage attempt for arrays
     if (wantArray) {
-      var salvaged = salvageArray(cleaned);
-      if (salvaged.length > 0) {
-        console.warn('[Gemini] Truncation recovery: salvaged', salvaged.length, 'objects');
-        return salvaged;
+      var s = salvageArray(cleaned);
+      if (s.length > 0) {
+        console.warn('[Gemini] Last-resort salvage:', s.length, 'items');
+        return s;
       }
     }
 
-    console.error('[Gemini] extractJSON failed. Raw:\n', raw.slice(0, 400));
+    console.error('[Gemini] extractJSON failed. Raw:\n', raw.slice(0, 300));
     return null;
   }
 
-  // ── validate result ───────────────────────────────────────
+  // ── validate ──────────────────────────────────────────────
   function isValid(r, wantArray, minItems) {
     if (!r) return false;
     if (wantArray) return Array.isArray(r) && r.length >= minItems;
     return typeof r === 'object' && !Array.isArray(r) && Object.keys(r).length > 0;
   }
 
-  // ── call with auto-retry ──────────────────────────────────
-  async function callWithRetry(prompt, expectArray, minItems, label) {
+  // ── call with smart retry ─────────────────────────────────
+  // Two retry strategies:
+  //   - Truncation (MAX_TOKENS / Unterminated): retry with fewer items
+  //   - Prose (model ignored JSON instruction): retry with reformat request
+  async function callWithRetry(prompt, expectArray, minItems, label, retryPromptFn) {
     var wantArray = !!expectArray;
 
     // attempt 1
-    var raw1 = await callRaw(prompt);
-    var result = extractJSON(raw1, wantArray);
+    var r1 = await callRaw(prompt);
+    var result = extractJSON(r1.text, wantArray);
     if (isValid(result, wantArray, minItems)) {
       console.log('[Gemini]', label, 'OK (attempt 1):', wantArray ? result.length + ' items' : 'object');
       return result;
     }
 
-    // attempt 2: ask Gemini to reformat its own response as JSON
-    console.warn('[Gemini]', label, 'attempt 1 invalid — retrying with reformat request');
-    var retryPrompt =
-      'Convert the content below into a valid JSON ' + (wantArray ? 'array' : 'object') + '.\n' +
-      'Output ONLY raw JSON. No text before or after. No markdown. No code fences.\n' +
-      (wantArray ? 'Start with [ and end with ].' : 'Start with { and end with }.') + '\n\n' +
-      'Content:\n' + raw1.slice(0, 3000);
-    var raw2 = await callRaw(retryPrompt);
-    result = extractJSON(raw2, wantArray);
-    if (isValid(result, wantArray, minItems)) {
-      console.log('[Gemini]', label, 'OK (attempt 2):', wantArray ? result.length + ' items' : 'object');
-      return result;
+    var isTrunc = r1.truncated ||
+      (r1.text && (r1.text.indexOf('"Unterminated') !== -1 || !r1.text.includes(wantArray ? ']' : '}')));
+
+    if (isTrunc && retryPromptFn) {
+      // truncation: use caller-provided shorter prompt
+      console.warn('[Gemini]', label, 'TRUNCATED — retrying with shorter prompt');
+      var shortPrompt = retryPromptFn();
+      var r2 = await callRaw(shortPrompt);
+      result = extractJSON(r2.text, wantArray);
+      if (isValid(result, wantArray, minItems)) {
+        console.log('[Gemini]', label, 'OK (attempt 2, short):', wantArray ? result.length + ' items' : 'object');
+        return result;
+      }
+    } else {
+      // prose: ask Gemini to reformat its own response
+      console.warn('[Gemini]', label, 'invalid JSON — retrying with reformat request');
+      var reformatPrompt =
+        'Convert the content below into a valid JSON ' + (wantArray ? 'array' : 'object') + '.\n' +
+        'Output ONLY raw JSON. No text. No markdown. No code fences.\n' +
+        (wantArray ? 'Start with [ and end with ].' : 'Start with { and end with }.') + '\n\n' +
+        'Content:\n' + r1.text.slice(0, 2000);
+      var r2b = await callRaw(reformatPrompt);
+      result = extractJSON(r2b.text, wantArray);
+      if (isValid(result, wantArray, minItems)) {
+        console.log('[Gemini]', label, 'OK (attempt 2, reformat):', wantArray ? result.length + ' items' : 'object');
+        return result;
+      }
     }
 
-    console.error('[Gemini]', label, 'both attempts failed.');
-    console.error('Attempt 1:\n', raw1.slice(0, 400));
-    console.error('Attempt 2:\n', raw2.slice(0, 400));
+    console.error('[Gemini]', label, 'FAILED both attempts');
+    console.error('Attempt 1 raw:\n', r1.text.slice(0, 300));
     throw new Error(
       label + ' failed. ' +
-      (raw1.length < 30
-        ? 'Gemini returned almost nothing — check your API key and quota.'
+      (isTrunc
+        ? 'Response was too long and got cut off. Retried with shorter prompt — still failed. Try again.'
         : 'Open browser console (F12) to see the raw Gemini response.')
     );
   }
 
-  // ── QUIZ (10 questions to avoid token limits) ─────────────
+  // ── QUIZ (10 questions, concise fields) ───────────────────
+  function quizPrompt(topics, diff, weak, count) {
+    return 'You are a technical interview coach for AI/ML and Software Engineering internships in India.\n' +
+      'Generate exactly ' + count + ' multiple-choice questions at ' + diff + ' difficulty.\n' +
+      'Topics (mix well): ' + topics.join(', ') + '\n' +
+      'Extra weight on weak areas: ' + weak + '\n\n' +
+      'RULES — MUST FOLLOW:\n' +
+      '- Output ONLY a raw JSON array. Nothing before [. Nothing after ]. No markdown.\n' +
+      '- Keep explanation under 15 words. Keep interview_tip under 10 words.\n' +
+      '- Each item: id(number), topic(string), question(string),\n' +
+      '  options(array of 4 strings "A) ..." "B) ..." "C) ..." "D) ..."),\n' +
+      '  correct(0-3), explanation(string MAX 15 words),\n' +
+      '  wrong_explanations(array of 3 strings MAX 8 words each),\n' +
+      '  interview_tip(string MAX 10 words), difficulty(string)';
+  }
+
   async function generateQuiz(topics, difficulty, weakAreas, count) {
-    count = count || 10; // 10 not 25 — 25 consistently hits MAX_TOKENS
+    count = count || 10;
     var diff = DIFF[difficulty] || 'Easy';
     var weak = Object.entries(weakAreas || {})
       .sort(function(a,b){ return b[1]-a[1]; })
-      .slice(0, 5).map(function(e){ return e[0]; }).join(', ') || 'none';
-
-    var prompt =
-      'You are a technical interview coach for AI/ML and Software Engineering internships in India.\n' +
-      'Generate exactly ' + count + ' multiple-choice questions at ' + diff + ' difficulty.\n' +
-      'Topics to cover (mix well): ' + topics.join(', ') + '\n' +
-      'Give extra questions on these weak areas: ' + weak + '\n\n' +
-      'RULES:\n' +
-      '- Output ONLY a raw JSON array. Nothing before [. Nothing after ]. No markdown.\n' +
-      '- Keep explanations concise (1-2 sentences max) to avoid hitting length limits.\n' +
-      '- Each item must have EXACTLY these keys:\n' +
-      '  id (number), topic (string), question (string),\n' +
-      '  options (array of 4 strings, each starting with "A) " "B) " "C) " "D) "),\n' +
-      '  correct (number 0-3), explanation (string, max 1 sentence),\n' +
-      '  wrong_explanations (array of 3 short strings),\n' +
-      '  interview_tip (string, max 1 sentence), difficulty (string)';
-
-    return await callWithRetry(prompt, true, Math.floor(count * 0.5), 'Quiz');
+      .slice(0,5).map(function(e){ return e[0]; }).join(', ') || 'none';
+    var prompt = quizPrompt(topics, diff, weak, count);
+    return await callWithRetry(
+      prompt, true, Math.floor(count * 0.5), 'Quiz',
+      function() { return quizPrompt(topics, diff, weak, Math.floor(count / 2)); }
+    );
   }
 
   // ── DSA ───────────────────────────────────────────────────
+  function dsaPrompt(topics, diff, recent, count) {
+    return 'You are a DSA interview coach. Generate exactly ' + count + ' coding problems at ' + diff + ' difficulty.\n' +
+      'Topics: ' + topics.join(', ') + '\n' +
+      'Avoid recent topics: ' + recent + '\n\n' +
+      'RULES — MUST FOLLOW:\n' +
+      '- Output ONLY a raw JSON array. Nothing before [. Nothing after ]. No markdown.\n' +
+      '- Keep all text fields short and concise.\n' +
+      '- Each item: id(number), title(string), topic(string), difficulty(string),\n' +
+      '  problem(string MAX 60 words), examples(array of {input,output,explanation}),\n' +
+      '  constraints(array of strings), hint(string MAX 20 words),\n' +
+      '  approach(string MAX 30 words), time_complexity(string), space_complexity(string), followup(string MAX 15 words)';
+  }
+
   async function generateDSA(topics, difficulty, count) {
     count = count || 3;
     var diff = DIFF[difficulty] || 'Easy';
     var recent = Store.state.dsaAIHistory.slice(-10)
       .map(function(h){ return h.topic; }).join(', ') || 'none';
-
-    var prompt =
-      'You are a DSA interview coach. Generate exactly ' + count + ' coding problems at ' + diff + ' difficulty.\n' +
-      'Topics: ' + topics.join(', ') + '\n' +
-      'Do not repeat these recent topics: ' + recent + '\n\n' +
-      'RULES:\n' +
-      '- Output ONLY a raw JSON array. Nothing before [. Nothing after ]. No markdown.\n' +
-      '- Keep descriptions concise to avoid length limits.\n' +
-      '- Each item must have EXACTLY these keys:\n' +
-      '  id (number), title (string), topic (string), difficulty (string),\n' +
-      '  problem (string), examples (array of objects with: input, output, explanation),\n' +
-      '  constraints (array of strings), hint (string), approach (string),\n' +
-      '  time_complexity (string), space_complexity (string), followup (string)';
-
-    return await callWithRetry(prompt, true, 1, 'DSA');
+    var prompt = dsaPrompt(topics, diff, recent, count);
+    return await callWithRetry(
+      prompt, true, 1, 'DSA',
+      function() { return dsaPrompt(topics, diff, recent, 1); }
+    );
   }
 
   // ── VOCABULARY ────────────────────────────────────────────
+  function vocabPrompt(recent, count) {
+    return 'You are a vocabulary coach for an Indian CS student preparing for tech internships.\n' +
+      'Generate exactly ' + count + ' words. Focus: Corporate English, AI/ML terms, startup language.\n' +
+      'Avoid recently used words: ' + recent + '\n\n' +
+      'RULES — MUST FOLLOW:\n' +
+      '- Output ONLY a raw JSON array. Nothing before [. Nothing after ]. No markdown.\n' +
+      '- Keep all text fields under 20 words each.\n' +
+      '- Each item: word(string), pronunciation(string), meaning(string MAX 20 words),\n' +
+      '  example(string MAX 15 words), professional_usage(string MAX 15 words),\n' +
+      '  memory_trick(string MAX 15 words), category(string),\n' +
+      '  quiz_question(string), quiz_options(4 strings), quiz_correct(0-3), quiz_explanation(string MAX 15 words)';
+  }
+
   async function generateVocab(count) {
     count = count || 10;
     var recent = Store.state.vocabHistory.slice(-5)
-      .reduce(function(acc, d) {
-        return acc.concat((d.words || []).map(function(w) { return w.word; }));
-      }, []).join(', ') || 'none';
-
-    var prompt =
-      'You are a vocabulary coach for an Indian CS student preparing for tech internships.\n' +
-      'Generate exactly ' + count + ' vocabulary words focused on: Corporate English, AI/ML terms, startup language, software engineering.\n' +
-      'Avoid these recently used words: ' + recent + '\n\n' +
-      'RULES:\n' +
-      '- Output ONLY a raw JSON array. Nothing before [. Nothing after ]. No markdown.\n' +
-      '- Keep all text fields concise (1-2 sentences max).\n' +
-      '- Each item must have EXACTLY these keys:\n' +
-      '  word (string), pronunciation (string), meaning (string),\n' +
-      '  example (string), professional_usage (string), memory_trick (string), category (string),\n' +
-      '  quiz_question (string), quiz_options (array of 4 strings),\n' +
-      '  quiz_correct (number 0-3), quiz_explanation (string)';
-
-    return await callWithRetry(prompt, true, 5, 'Vocabulary');
+      .reduce(function(acc,d){ return acc.concat((d.words||[]).map(function(w){ return w.word; })); }, [])
+      .join(', ') || 'none';
+    var prompt = vocabPrompt(recent, count);
+    return await callWithRetry(
+      prompt, true, 5, 'Vocabulary',
+      function() { return vocabPrompt(recent, 5); }
+    );
   }
 
   // ── ENGLISH ───────────────────────────────────────────────
-  async function generateEnglish(difficulty) {
-    var diff = DIFF[difficulty] || 'Easy';
-    var recent = Store.state.englishHistory.slice(-5)
-      .map(function(h) { return h.topic || ''; }).filter(Boolean).join(', ') || 'none';
-
-    var prompt =
-      'You are an English coach for Indian tech students preparing for internship interviews.\n' +
+  function englishPrompt(diff, recent) {
+    return 'You are an English coach for Indian tech students preparing for internship interviews.\n' +
       'Generate one English lesson at ' + diff + ' difficulty.\n' +
       'Choose ONE topic from: professional sentence framing, grammar correction, corporate communication,\n' +
       'interview English, email writing, common Indian English mistakes, formal vs informal language.\n' +
-      'Avoid recently covered topics: ' + recent + '\n\n' +
-      'RULES:\n' +
+      'Avoid recently covered: ' + recent + '\n\n' +
+      'RULES — MUST FOLLOW:\n' +
       '- Output ONLY a raw JSON object. Nothing before {. Nothing after }. No markdown.\n' +
-      '- Keep all text fields concise (1-2 sentences max) to avoid length limits.\n' +
-      '- The object must have EXACTLY these keys:\n' +
-      '  topic (string), difficulty (string), explanation (string),\n' +
-      '  good_examples (array of 3 strings), bad_examples (array of 2 strings),\n' +
-      '  exercises (array of exactly 5 objects, each with:\n' +
-      '    type (string), instruction (string), question (string),\n' +
-      '    options (array of 4 strings), correct (number 0-3), explanation (string)),\n' +
-      '  interview_phrases (array of 3 strings), key_takeaway (string)';
+      '- Keep ALL text fields under 20 words.\n' +
+      '- Keys: topic(string), difficulty(string), explanation(string MAX 40 words),\n' +
+      '  good_examples(3 strings MAX 15 words each), bad_examples(2 strings MAX 15 words each),\n' +
+      '  exercises(exactly 5 objects: type,instruction,question,options(4 strings),correct(0-3),explanation(MAX 20 words)),\n' +
+      '  interview_phrases(3 strings MAX 12 words each), key_takeaway(string MAX 20 words)';
+  }
 
-    var result = await callWithRetry(prompt, false, 1, 'English');
-    if (!result.exercises || !result.exercises.length) {
-      throw new Error('English lesson missing exercises');
-    }
+  async function generateEnglish(difficulty) {
+    var diff = DIFF[difficulty] || 'Easy';
+    var recent = Store.state.englishHistory.slice(-5)
+      .map(function(h){ return h.topic || ''; }).filter(Boolean).join(', ') || 'none';
+    var prompt = englishPrompt(diff, recent);
+    var result = await callWithRetry(
+      prompt, false, 1, 'English',
+      function() { return englishPrompt(diff, recent); }
+    );
+    if (!result.exercises || !result.exercises.length) throw new Error('English lesson missing exercises');
     return result;
   }
 
-  // ── APTITUDE (10 questions to avoid token limits) ─────────
+  // ── APTITUDE (5 questions, short solution field) ──────────
+  // KEY FIX: aptitude solution field was the main cause of truncation.
+  // Math working like "Let M = max marks. 0.6M - 30 = 0.45M + 15..." is very long.
+  // Solution: ask for solution as ONE short sentence answer only.
+  function aptPrompt(topics, diff, weak, count) {
+    return 'You are an aptitude coach for Indian campus placements.\n' +
+      'Generate exactly ' + count + ' aptitude questions at ' + diff + ' difficulty.\n' +
+      'Topics: ' + topics.join(', ') + '\n' +
+      'Extra weight on weak areas: ' + weak + '\n\n' +
+      'RULES — MUST FOLLOW:\n' +
+      '- Output ONLY a raw JSON array. Nothing before [. Nothing after ]. No markdown.\n' +
+      '- solution field: ONE short sentence with the answer only. NO step-by-step working.\n' +
+      '- shortcut field: ONE short trick sentence or empty string.\n' +
+      '- Each item: id(number), topic(string), question(string),\n' +
+      '  options(array of 4 strings "A) ..." "B) ..." "C) ..." "D) ..."),\n' +
+      '  correct(0-3), solution(string MAX 15 words), shortcut(string MAX 10 words), difficulty(string)';
+  }
+
   async function generateAptitude(topics, difficulty, weakAreas, count) {
-    count = count || 10; // 10 not 17 — 17 consistently hits MAX_TOKENS
+    count = count || 8;
     var diff = DIFF[difficulty] || 'Easy';
     var weak = Object.entries(weakAreas || {})
       .sort(function(a,b){ return b[1]-a[1]; })
-      .slice(0, 3).map(function(e){ return e[0]; }).join(', ') || 'none';
-
-    var prompt =
-      'You are an aptitude coach for Indian campus placements (TCS, Infosys, Wipro, Paytm, Swiggy).\n' +
-      'Generate exactly ' + count + ' aptitude questions at ' + diff + ' difficulty.\n' +
-      'Topics: ' + topics.join(', ') + '\n' +
-      'Give extra questions on weak areas: ' + weak + '\n\n' +
-      'RULES:\n' +
-      '- Output ONLY a raw JSON array. Nothing before [. Nothing after ]. No markdown.\n' +
-      '- Keep solution and shortcut fields concise (2-3 sentences max) to avoid length limits.\n' +
-      '- Each item must have EXACTLY these keys:\n' +
-      '  id (number), topic (string), question (string),\n' +
-      '  options (array of 4 strings, each starting with "A) " "B) " "C) " "D) "),\n' +
-      '  correct (number 0-3), solution (string, step-by-step but concise),\n' +
-      '  shortcut (string, quick trick or empty string), difficulty (string)';
-
-    return await callWithRetry(prompt, true, Math.floor(count * 0.5), 'Aptitude');
+      .slice(0,3).map(function(e){ return e[0]; }).join(', ') || 'none';
+    var prompt = aptPrompt(topics, diff, weak, count);
+    return await callWithRetry(
+      prompt, true, Math.floor(count * 0.5), 'Aptitude',
+      function() { return aptPrompt(topics, diff, weak, 5); }
+    );
   }
 
   // ── PYTHON LESSON ─────────────────────────────────────────
-  async function generatePythonLesson(topic, day) {
-    var prompt =
-      'You are a Python tutor teaching an Indian CS student from scratch for AI/ML internships.\n' +
-      'Generate a daily Python lesson for Day ' + day + ' on the topic: ' + topic + '\n\n' +
-      'RULES:\n' +
+  function pythonPrompt(topic, day) {
+    return 'You are a Python tutor for an Indian CS student preparing for AI/ML internships.\n' +
+      'Generate a Python lesson for Day ' + day + ' on: ' + topic + '\n\n' +
+      'RULES — MUST FOLLOW:\n' +
       '- Output ONLY a raw JSON object. Nothing before {. Nothing after }. No markdown.\n' +
-      '- Keep all text fields concise to avoid length limits.\n' +
-      '- The object must have EXACTLY these keys:\n' +
-      '  topic (string), day (number), concept (string, 2-3 sentences explaining the topic),\n' +
-      '  key_points (array of 4-5 short strings),\n' +
-      '  code_example (string, a clean working Python code snippet with comments, max 20 lines),\n' +
-      '  common_mistakes (array of 2-3 short strings),\n' +
-      '  coding_question (object with: title, description, examples (array of {input, output}), hint),\n' +
-      '  mcq (array of exactly 5 objects, each with:\n' +
-      '    question (string), options (array of 4 strings), correct (number 0-3), explanation (string, 1 sentence))';
+      '- Keep ALL text fields concise. Code example max 15 lines.\n' +
+      '- Keys: topic(string), day(number), concept(string MAX 50 words),\n' +
+      '  key_points(array of 4-5 strings MAX 12 words each),\n' +
+      '  code_example(string — working Python code with comments MAX 15 lines),\n' +
+      '  common_mistakes(array of 2-3 strings MAX 12 words each),\n' +
+      '  coding_question(object: title, description(MAX 40 words), examples(array of {input,output}), hint(MAX 15 words)),\n' +
+      '  mcq(array of exactly 5 objects: question, options(4 strings), correct(0-3), explanation(MAX 15 words))';
+  }
 
-    var result = await callWithRetry(prompt, false, 1, 'Python Lesson');
+  async function generatePythonLesson(topic, day) {
+    var prompt = pythonPrompt(topic, day);
+    var result = await callWithRetry(
+      prompt, false, 1, 'Python Lesson',
+      function() { return pythonPrompt(topic, day); }
+    );
     if (!result.concept || !result.mcq || !result.coding_question) {
       throw new Error('Python lesson missing required fields');
     }
@@ -385,21 +411,21 @@ const Gemini = (() => {
   async function reviewCode(problem, userCode, language) {
     language = language || 'Python';
     var prompt =
-      'You are a senior software engineer reviewing student code for tech internship prep.\n' +
-      'Language: ' + language + '\n' +
-      'Problem: ' + problem.slice(0, 400) + '\n' +
-      'Code:\n' + userCode.slice(0, 1000) + '\n\n' +
-      'RULES:\n' +
+      'Review this ' + language + ' solution for a tech internship coding problem.\n' +
+      'Problem: ' + problem.slice(0, 300) + '\n' +
+      'Code:\n' + userCode.slice(0, 800) + '\n\n' +
+      'RULES — MUST FOLLOW:\n' +
       '- Output ONLY a raw JSON object. Nothing before {. Nothing after }. No markdown.\n' +
-      '- Keep all fields concise (1-2 sentences max).\n' +
-      '- The object must have EXACTLY these keys:\n' +
-      '  is_correct (boolean), correctness_note (string),\n' +
-      '  bugs (array of strings, empty if none), time_complexity (string), space_complexity (string),\n' +
-      '  quality_score (number 1-10), quality_note (string),\n' +
-      '  improvements (array of max 3 strings), optimal_approach (string),\n' +
-      '  optimal_code (string), good_things (array of max 2 strings), interview_verdict (string)';
-
-    return await callWithRetry(prompt, false, 1, 'Code Review');
+      '- Keep ALL text fields under 20 words.\n' +
+      '- Keys: is_correct(boolean), correctness_note(string MAX 20 words),\n' +
+      '  bugs(array of strings MAX 10 words each, empty array if none),\n' +
+      '  time_complexity(string), space_complexity(string),\n' +
+      '  quality_score(1-10), quality_note(string MAX 15 words),\n' +
+      '  improvements(array of max 3 strings MAX 15 words each),\n' +
+      '  optimal_approach(string MAX 25 words), optimal_code(string),\n' +
+      '  good_things(array of max 2 strings MAX 10 words each),\n' +
+      '  interview_verdict(string MAX 20 words)';
+    return await callWithRetry(prompt, false, 1, 'Code Review', null);
   }
 
   return {
