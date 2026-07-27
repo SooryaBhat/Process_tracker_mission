@@ -35,6 +35,7 @@ const App = (() => {
       case 'vocab':        VocabPage.render();   break;
       case 'english':      EnglishPage.render(); break;
       case 'aptitude':     AptPage.render();     break;
+      case 'python':       PythonPage.render();  break;
     }
     updateHUD();
   }
