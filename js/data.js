@@ -1,5 +1,5 @@
 // ============================================================
-//  DATA DEFINITIONS v2
+//  DATA DEFINITIONS v3
 // ============================================================
 const DATA = {
   aiml: ['Python Revision','SQL Revision','Statistics Revision','Machine Learning Revision','Deep Learning Revision','Pandas Revision','Scikit-Learn Revision'],
@@ -40,12 +40,48 @@ const DATA = {
 
   aptitudeTopics: ['Percentage','Ratio & Proportion','Profit & Loss','Time & Work','Time & Distance','Probability','Permutation & Combination','Logical Reasoning','Coding Aptitude','Pattern Recognition'],
 
+  // Python Learning — 30-day structured curriculum
+  pythonCurriculum: [
+    'Python Basics: Variables, Data Types, Input/Output',
+    'Strings: Methods, Slicing, Formatting',
+    'Lists: Creation, Indexing, Methods',
+    'Tuples and Sets',
+    'Dictionaries: Keys, Values, Methods',
+    'Conditional Statements: if, elif, else',
+    'Loops: for, while, break, continue',
+    'Functions: Definition, Arguments, Return Values',
+    'Lambda Functions and Map/Filter',
+    'List Comprehensions',
+    'File Handling: Read, Write, Append',
+    'Exception Handling: try, except, finally',
+    'Modules and Imports',
+    'Object-Oriented Programming: Classes and Objects',
+    'OOP: Inheritance and Polymorphism',
+    'OOP: Encapsulation and Abstraction',
+    'Decorators and Generators',
+    'Regular Expressions',
+    'NumPy Basics: Arrays and Operations',
+    'NumPy: Indexing, Slicing, Broadcasting',
+    'Pandas Basics: Series and DataFrame',
+    'Pandas: Data Cleaning and Filtering',
+    'Pandas: GroupBy and Aggregation',
+    'Matplotlib and Seaborn Basics',
+    'Scikit-Learn: Data Preprocessing',
+    'Scikit-Learn: Linear and Logistic Regression',
+    'Scikit-Learn: Decision Trees and Random Forest',
+    'SQL with Python: SQLite and Pandas',
+    'APIs with Python: requests library',
+    'FastAPI Basics: Building a Simple API'
+  ],
+
   xpRewards: {
     quiz: 30, dsa_ai: 50, vocab: 15, english: 15,
-    aptitude: 20, application: 20, project: 25, streak_bonus: 10
+    aptitude: 20, application: 20, project: 25,
+    python_mcq: 20, python_coding: 40, streak_bonus: 10
   },
 
   levelNames: ['','Rookie','Learner','Explorer','Thinker','Solver','Coder','Developer','Engineer','Architect','Expert','Master','Champion','Legend','Prodigy','Ace','God Mode'],
 };
 
-const START_DATE = new Date('2026-06-24');
+// Day 0 = tomorrow (fresh start)
+const START_DATE = new Date('2026-07-27');
